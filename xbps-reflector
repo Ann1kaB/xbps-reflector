@@ -1,0 +1,152 @@
+#!/bin/bash
+
+if [[ "$1" = "--help" || "$1" = "-h" ]]; then
+	printf "Help:\nTo use Tier 2 mirrors, use --extended\
+		\nUse --fastest to auto select server based on best ping\
+		\nuse --path to specify custom xbps.d path."
+	exit
+fi
+
+if [ "$EUID" != "0" ]; then
+	echo "Script must be run as root, exiting..."
+	exit 1
+fi
+
+args=($@)
+get_args() {
+	for _arg in ${!args[@]}; do
+		if [ "${args[$_arg]}" = "--path" ]; then
+			path=${args[$((_arg+1))]}
+		fi
+		if [ "${args[$_arg]}" = "--fastest" ]; then
+			_FASTEST=${args[$_arg]}
+		fi
+	done
+}
+
+path="/etc/xbps.d"
+if [[ "$@" =~ .*"--path".* ]]; then
+	get_args
+	if [ ! -d "$path" ]; then
+		echo "Path is either inaccessible or doesn't exist, exiting..."
+		exit 2
+	fi
+	if [[ ! "$path" =~ .*"xbps.d".* ]]; then
+		echo "Path is not a valid xbps mirror path, exiting..."
+		exit 3
+	fi
+fi
+
+main() {
+	for mirror in ${!repo_list[@]}; do
+		_url=$(cut -d'/' -f3 <<< ${repo_list[$mirror]})
+		_ping=$(ping $_url -w 1 -c 1 | grep -o "time=.*ms" | sed 's/time=//')
+		if [ -z "$_ping" ]; then
+			_ping="TIMED OUT"
+		fi
+		printf "[$_ping] ${repo_local[$mirror]} $((mirror+1)): ${repo_list[$mirror]}\n"
+		if [[ "$_FASTEST" = "--fastest" ]]; then
+			if [ "$_ping" = "TIMED OUT" ]; then
+				_ping="-1"
+			fi
+			_speed=$(sed 's/time=//;s/ ms//' <<< $_ping)
+			# convert float to int
+			_speed=$(printf "%.0f\n" "$_speed")
+			_pings+=($_speed)
+		fi
+	done
+	if [ -n "$_FASTEST" ]; then
+		best_ping=${_pings[0]}
+		for _p in ${!_pings[@]}; do
+			echo ${_pings[$_p]}
+			if [[ ${_pings[$_p]} -lt $best_ping && ${_pings[$_p]} -ne -1 ]]; then
+				best_ping=${_pings[$_p]}
+				best_ping_index=$_p
+			fi
+		done
+	fi
+	if [ "$_FASTEST" != "--fastest" ];then
+		printf "\nMirror choice: [1-${#repo_list[@]}?]"
+		read _MIRROR;
+		_MIRROR=$((_MIRROR-1))
+	else
+		_MIRROR=${best_ping_index}
+	fi
+	if [[ $_MIRROR -le ${#repo_list[@]} && $_MIRROR -ge 0 ]]; then
+		# for every '/', add a backslash to escape
+		_repo=$(sed 's/\//\\\//g' <<< ${repo_list[$_MIRROR]})
+		for _r in $(ls $path); do
+			perl -pe "s/https?.*(?=current)/$_repo/" -i ${path}/$_r
+		done
+		printf "\nSyncing with selected mirror: ${repo_list[$_MIRROR]}\n\n"
+		xbps-install -S
+	else
+		printf "invalid selection, exiting..."
+		exit 1
+	fi
+}
+
+if [[ -z "$@"  ]] || [[ ! "$@" =~ .*"--extended".* ]]; then
+	repo_list=(
+	'https://alpha.de.repo.voidlinux.org/' 
+	'https://mirrors.servercentral.com/voidlinux/'
+	'https://alpha.us.repo.voidlinux.org/'
+	'https://mirror.clarkson.edu/voidlinux/'
+	)
+	repo_local=(
+	'EU: Finland'
+	'USA: Chicago'
+	'USA: Kansas City'
+	'USA: New York'
+	)
+	get_args
+	main
+
+elif [[ "$@" =~ .*"--extended".* ]]; then
+	repo_list=(
+	'https://mirror.ps.kz/voidlinux/'
+	'https://mirrors.bfsu.edu.cn/voidlinux/'
+	'https://mirrors.cnnic.cn/voidlinux/'
+	'https://mirrors.tuna.tsinghua.edu.cn/voidlinux/'
+	'https://mirror.maakpain.kro.kr/void/'
+	'https://void.webconverger.org/'
+	'https://mirror.aarnet.edu.au/pub/voidlinux/'
+	'https://ftp.swin.edu.au/voidlinux/'
+	'https://void.cijber.net/'
+	'http://ftp.dk.xemacs.org/voidlinux/'
+	'https://mirrors.dotsrc.org/voidlinux/'
+	'https://quantum-mirror.hu/mirrors/pub/voidlinux/'
+	'https://mirror.i-novus.ru/mirrors/voidlinux/'
+	'http://ftp.debian.ru/mirrors/voidlinux/'
+	'https://mirror.yandex.ru/mirrors/voidlinux/'
+	'https://cdimage.debian.org/mirror/voidlinux/'
+	'https://ftp.acc.umu.se/mirror/voidlinux/'
+	'https://ftp.gnome.org/mirror/voidlinux/'
+	'https://ftp.lysator.liu.se/pub/voidlinux/'
+	'https://ftp.sunet.se/mirror/voidlinux/'
+	)
+	repo_local=(
+	'Asia: Almaty, KZ'
+	'Asia: China'
+	'Asia: China'
+	'Asia: China'
+	'Asia: Seoul, SK'
+	'Asia: Singapore'
+	'AU: Canberra'
+	'AU: Melbourne'
+	'EU: Amsterdam, NL'
+	'EU: Denmark'
+	'EU: Denmark'
+	'EU: Hungary'
+	'EU: Ireland'
+	'EU: Russia'
+	'EU: Russia'
+	'EU: Sweden'
+	'EU: Sweden'
+	'EU: Sweden'
+	'EU: Sweden'
+	'EU: Sweden'
+	)
+	get_args
+	main
+fi
